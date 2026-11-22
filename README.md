@@ -94,4 +94,4 @@ Placeholders: `<OWNER>` (your Kaggle username), `<KERNEL_SLUG>`, `<KIT_DATASET>`
 `<CONTROL_DATASET>`, `<OUTBOX_DATASET>`, `<RELAY_USER>`, `<RELAY_HOST>`. The repository contains no credentials,
 hostnames, IPs or project data.
 
-License: see [LICENSE](LICENSE). The owner has not chosen one yet.
+License: MIT, see [LICENSE](LICENSE).
