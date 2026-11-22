@@ -97,11 +97,11 @@ Never print credentials. Inputs that are not yours to publish stay inside this s
 
 # --- control and progress ---------------------------------------------------------------------------
 CONTROL_FILE = 'station_control.json'   # read at start from INPUT_ROOT (attached control dataset), if present
-CONTROL_DATASET = None        # '<KAGGLE_USER>/<CONTROL_DATASET>': re-downloaded every CONTROL_POLL_S (UNVERIFIED)
+CONTROL_DATASET = None        # '<KAGGLE_USER>/<CONTROL_DATASET>': re-downloaded every CONTROL_POLL_S (MEASURED: works)
 CONTROL_POLL_S = 300
-OUTBOX_DATASET = None         # '<KAGGLE_USER>/<OUTBOX_DATASET>': status versions every OUTBOX_EVERY_S (UNVERIFIED)
+OUTBOX_DATASET = None         # '<KAGGLE_USER>/<OUTBOX_DATASET>': status versions every OUTBOX_EVERY_S (MEASURED: works)
 OUTBOX_EVERY_S = 1800
-STDOUT_PROGRESS_S = 300       # print one "STATION {...}" JSON line this often (for `kaggle kernels logs`)
+STDOUT_PROGRESS_S = 300       # print one "STATION {...}" JSON line this often (live: `kaggle kernels logs -f`)
 RELAY_TARGET = None           # appendix A only: 'user@host' with an rrsync-forced key (credential RELAY_SSH_KEY)
 
 # --- results ----------------------------------------------------------------------------------------
@@ -310,7 +310,7 @@ def kaggle_env():
 
 
 def fetch_control():
-    """Live control: download the control dataset's current version (UNVERIFIED from inside a batch run)."""
+    """Live control: download the control dataset's current version (MEASURED: works with the session login)."""
     d = os.path.join(PRIVATE_DIR, 'control')
     shutil.rmtree(d, ignore_errors=True)
     os.makedirs(d)
@@ -324,7 +324,7 @@ def fetch_control():
 
 
 def push_outbox(status):
-    """Progress up: publish a new version of a private outbox dataset (UNVERIFIED from inside a batch run)."""
+    """Progress up: publish a new version of a private outbox dataset (MEASURED: works with the session login)."""
     d = os.path.join(PRIVATE_DIR, 'outbox')
     os.makedirs(d, exist_ok=True)
     with open(d + '/dataset-metadata.json', 'w') as f:

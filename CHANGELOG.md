@@ -2,6 +2,31 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions are dates until the owner picks a scheme.
 
+## [Unreleased] - 2026-11-22 (live test)
+
+### Verified on Kaggle
+- First end-to-end run of the template from a fresh clone, following docs/00 step by step: a 4 KB kit packed with
+  `pack_kit.sh`, an existing keys dataset, a control and an outbox dataset made with `station_ctl.sh`, one shell
+  worker and one Claude Code worker (preset flags), `RUN_HOURS = 0.5`, CPU, no gate.
+- MEASURED answers to the questions marked UNVERIFIED before: `kaggle kernels logs -f` streams live (plain `logs`
+  stays empty until the end); the session's built-in login downloads newer control dataset versions and publishes
+  outbox versions (no `KAGGLE_JSON`); the run output is downloadable as soon as status is `COMPLETE`, and each
+  version's output stays downloadable as `<OWNER>/<KERNEL_SLUG>/<N>`; a `FORCE=1` re-push starts a parallel run and
+  does not stop the running one, while `kernels status` reports only the newest version.
+- Deadline moved earlier through the control file, soft stop, SIGTERM at the deadline, results packed, final
+  `status.json` with `"final": true`: all as documented.
+
+### Fixed
+- `station_ctl.sh logs` takes `-f` (live); without it the CLI prints nothing during a run.
+- docs/00: real CLI output for steps 3 to 11 (dataset create line, `ready` without newline, push line, `COMPLETE`,
+  `progress` header lines, `<KERNEL_SLUG>.log` in the output), `kaggle kernels delete` in the clean-up table,
+  `KAGGLE_JSON` marked as normally not needed.
+- docs/03: the kernel does not log or check the kit's sha256 (the old text said it did).
+- docs/05: how to run mixed workers (shell and Claude Code) with one `WORKER_CMD`, and why to pass `{BRIEF_FILE}`
+  rather than `{BRIEF}` inside `bash -c`.
+- docs/SECURITY, docs/02: the session login has write access to the owner's datasets (MEASURED), not only read.
+- docs/01, 04, 06, 09, 10, 11, README, kernel comments, `push_kernel.sh` help: UNVERIFIED rows replaced by measured values.
+
 ## [Unreleased] - 2026-11-22
 
 ### Added
@@ -25,5 +50,5 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions are d
 - The rented-server relay is optional (appendix A). The main path needs only a home computer and Kaggle.
 
 ### Known gaps
-- The template has not yet been run end to end on Kaggle. The Kaggle-native live channels (control dataset
-  re-download, outbox dataset, live `kernels logs -f`) are UNVERIFIED.
+- (Closed by the live test above.) The template had not yet been run end to end on Kaggle, and the Kaggle-native
+  live channels were UNVERIFIED.

@@ -20,7 +20,10 @@ to the script (`tests/test_docs_sync.py` checks this).
 | 8 results | `pack_results()` | seconds |
 
 The reference run used the project-specific predecessor of this file. The timings carry over because the steps
-are the same. The template itself has been run end to end only offline (`tests/test_station_e2e.py`).
+are the same. The template itself was run end to end on Kaggle on 2026-11-22 (30-minute test, one shell worker
+and one Claude Code worker, a 4 KB kit, no gate): credentials and kit at +3 s, env probe at +4 s, install 10 s,
+probe OK at +19 s, both workers started by +39 s, control dataset version applied 36 s after publishing,
+deadline kill to `done` in 34 s (MEASURED).
 
 ## CONFIG reference
 
@@ -52,8 +55,8 @@ are the same. The template itself has been run end to end only offline (`tests/t
 | `WORKER_STAGGER_S` | 20 | delay between worker starts |
 | `BRIEF_TEMPLATE` | generic brief | must state the INBOX / STOP / STATUS / REPORT conventions |
 | `CONTROL_FILE` | `station_control.json` | name searched under `INPUT_ROOT` at start |
-| `CONTROL_DATASET`, `CONTROL_POLL_S` | `None`, 300 | live control (UNVERIFIED channel, docs/06) |
-| `OUTBOX_DATASET`, `OUTBOX_EVERY_S` | `None`, 1800 | progress dataset (UNVERIFIED channel) |
+| `CONTROL_DATASET`, `CONTROL_POLL_S` | `None`, 300 | live control (MEASURED channel, docs/06) |
+| `OUTBOX_DATASET`, `OUTBOX_EVERY_S` | `None`, 1800 | progress dataset (MEASURED channel, docs/06) |
 | `STDOUT_PROGRESS_S` | 300 | `STATION {...}` lines |
 | `RELAY_TARGET` | `None` | appendix A |
 | `OUT` | `/kaggle/working/out` | run output folder |
@@ -173,11 +176,11 @@ Never print credentials. Inputs that are not yours to publish stay inside this s
 
 # --- control and progress ---------------------------------------------------------------------------
 CONTROL_FILE = 'station_control.json'   # read at start from INPUT_ROOT (attached control dataset), if present
-CONTROL_DATASET = None        # '<KAGGLE_USER>/<CONTROL_DATASET>': re-downloaded every CONTROL_POLL_S (UNVERIFIED)
+CONTROL_DATASET = None        # '<KAGGLE_USER>/<CONTROL_DATASET>': re-downloaded every CONTROL_POLL_S (MEASURED: works)
 CONTROL_POLL_S = 300
-OUTBOX_DATASET = None         # '<KAGGLE_USER>/<OUTBOX_DATASET>': status versions every OUTBOX_EVERY_S (UNVERIFIED)
+OUTBOX_DATASET = None         # '<KAGGLE_USER>/<OUTBOX_DATASET>': status versions every OUTBOX_EVERY_S (MEASURED: works)
 OUTBOX_EVERY_S = 1800
-STDOUT_PROGRESS_S = 300       # print one "STATION {...}" JSON line this often (for `kaggle kernels logs`)
+STDOUT_PROGRESS_S = 300       # print one "STATION {...}" JSON line this often (live: `kaggle kernels logs -f`)
 RELAY_TARGET = None           # appendix A only: 'user@host' with an rrsync-forced key (credential RELAY_SSH_KEY)
 
 # --- results ----------------------------------------------------------------------------------------
@@ -196,7 +199,7 @@ SNAPSHOT_EVERY_S = 1800
 - Nothing here is secret. Credentials are referenced by name only.
 - `MAX_HOURS` is the only time that can never change after start. Make it generous and steer with the control file.
 - `SETUP_SHELL` runs with `/bin/bash` and `set -e`. The measured run lost an attempt to `/bin/sh` lacking `source` (docs/10 #3).
-- `WORKER_CMD` can be any program. The Claude Code preset is the measured worker command.
+- `WORKER_CMD` can be any program. The Claude Code preset is the measured worker command. One command for mixed workers (shell and Claude Code in one run): docs/05.
 - `RESULT_ONLY_NEW_OR_CHANGED` is what keeps toolchain and target data out of `results.tar.gz`.
 
 ### 3. State and helpers: time, log, shell, inputs, credentials
@@ -425,7 +428,7 @@ def kaggle_env():
 
 
 def fetch_control():
-    """Live control: download the control dataset's current version (UNVERIFIED from inside a batch run)."""
+    """Live control: download the control dataset's current version (MEASURED: works with the session login)."""
     d = os.path.join(PRIVATE_DIR, 'control')
     shutil.rmtree(d, ignore_errors=True)
     os.makedirs(d)
@@ -439,7 +442,7 @@ def fetch_control():
 
 
 def push_outbox(status):
-    """Progress up: publish a new version of a private outbox dataset (UNVERIFIED from inside a batch run)."""
+    """Progress up: publish a new version of a private outbox dataset (MEASURED: works with the session login)."""
     d = os.path.join(PRIVATE_DIR, 'outbox')
     os.makedirs(d, exist_ok=True)
     with open(d + '/dataset-metadata.json', 'w') as f:
@@ -462,7 +465,7 @@ def relay_sync(push_only=False):
 
 ```
 
-- Without `KAGGLE_JSON` the station relies on the session's built-in Kaggle login (MEASURED for reads; download and version UNVERIFIED).
+- Without `KAGGLE_JSON` the station relies on the session's built-in Kaggle login (MEASURED: `kernels list`, `datasets download` and `datasets version` all worked with it in the 2026-11-22 template run; `KAGGLE_JSON` was not needed).
 - Every network call has a subprocess timeout and `check=False`: a failing channel is logged and the run continues.
 - `push_outbox()` uses `-d` to delete old outbox versions, so the outbox does not grow without bound.
 

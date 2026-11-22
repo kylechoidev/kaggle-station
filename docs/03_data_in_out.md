@@ -6,13 +6,14 @@
 |---|---|---|
 | create | `kaggle datasets create -p <DIR> -q` | `<DIR>` holds the files and `dataset-metadata.json` (docs/11). Private unless `-u/--public`. |
 | new version | `kaggle datasets version -p <DIR> -m "<note>" -q` | `-d` deletes old versions; `-r zip\|tar\|skip` sets how sub-directories are uploaded |
-| wait | `kaggle datasets status <OWNER>/<SLUG>` | prints `ready`; `--format json` adds `current_version_number` |
+| wait | `kaggle datasets status <OWNER>/<SLUG>` | prints `ready` (no trailing newline, MEASURED); `--format json` prints `{"status": "ready", "current_version_number": N}` |
 | list files | `kaggle datasets files <OWNER>/<SLUG>` | |
 | delete | `kaggle datasets delete <OWNER>/<SLUG> -y` | |
 | attach to the run | `"dataset_sources": ["<OWNER>/<SLUG>", ...]` in `kernel-metadata.json` | `scripts/push_kernel.sh` writes it |
 
 Flags MEASURED from CLI 2.2.5 help. A run mounts the version that is current when it starts (UNVERIFIED, but the
-gate in docs/07 and the logged sha256 catch a stale kit). Wait for `ready` before pushing.
+gate in docs/07 and a version stamp printed by `ENV_PROBE` catch a stale kit; the kernel does not check the uploaded
+`.sha256` file by itself). Wait for `ready` before pushing.
 
 ### Recommended dataset split
 
@@ -79,9 +80,9 @@ A private dataset is still data stored by a third party under its terms.
 
 | Route | What | When | Tag |
 |---|---|---|---|
-| Run output | everything under `/kaggle/working` (the kernel uses `/kaggle/working/out/`) | after the run ends: `kaggle kernels output <OWNER>/<KERNEL_SLUG> -p <DIR> -o` | MEASURED: empty while running / after the end: UNVERIFIED (per Kaggle docs) |
-| stdout | `STATION {...}` progress lines, log lines | `kaggle kernels logs` | UNVERIFIED live (docs/06) |
-| Outbox dataset | `status.json` | every `OUTBOX_EVERY_S` | UNVERIFIED (docs/06) |
+| Run output | everything under `/kaggle/working` (the kernel uses `/kaggle/working/out/`) | after the run ends: `kaggle kernels output <OWNER>/<KERNEL_SLUG> -p <DIR> -o` | MEASURED: empty while running; complete as soon as status is `COMPLETE`, plus `<KERNEL_SLUG>.log`; older versions by `<OWNER>/<KERNEL_SLUG>/<N>` |
+| stdout | `STATION {...}` progress lines, log lines | live: `kaggle kernels logs -f` (CLI 2.2.5); after the end: `kaggle kernels logs` | MEASURED (docs/06) |
+| Outbox dataset | `status.json` | every `OUTBOX_EVERY_S` | MEASURED, session login (docs/06) |
 | Own server | `status.json` | appendix A | MEASURED design (relay worked in the measured run) |
 
 ### The results allow-list

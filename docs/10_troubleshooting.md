@@ -30,7 +30,7 @@ Each of these cost one attempt of about 4 minutes (push, wait, read the log). Al
 | `PROBE FAILED (token? internet? usage limit?)` | token wrong, expired or revoked; no internet; usage window spent | `claude setup-token` again and rebuild the keys dataset; check `rate_limit_event` in earlier logs |
 | workers exit within a minute, rc 0 | a STOP file or other stop marker was packed into the kit, or `stop_all: true` was left in the control file | do not pack `agents/*/STOP`; `station_ctl.sh reset` |
 | new run receives old messages | the control file still holds them; ids are remembered within one run only | `station_ctl.sh reset ./ctl` before pushing |
-| `control download failed rc 1 ...` | the session cannot download the control dataset with its built-in auth (UNVERIFIED path) | add `KAGGLE_JSON` to the keys dataset, or use level 0 (docs/06) |
+| `control download failed rc 1 ...` | the session cannot download the control dataset with its built-in auth (it could in the measured template run; check the dataset id and that it is `ready`) | add `KAGGLE_JSON` to the keys dataset, or use level 0 (docs/06) |
 | `outbox version rc 1 ...` | the same for writing | same |
 | `bad control document ...` | invalid JSON or time format | `station_ctl.sh show ./ctl`; edit only with `station_ctl.sh` |
 | message never acted on | worker has not reached a batch boundary; ambiguous text | wait; say what it replaces; use absolute UTC times |
@@ -39,10 +39,12 @@ Each of these cost one attempt of about 4 minutes (push, wait, read the log). Al
 | `OSError: [Errno 28] No space left on device` | `/kaggle/working` is 20 GB | keep the kit and scratch outside `/kaggle/working`; trim logs |
 | process killed, no traceback | out of memory (30 GiB cgroup, no swap) | fewer parallel heavy jobs |
 | `status.json` has no `"final": true` | container killed before the end (platform limit, cancel) | lower `MAX_HOURS`; use the last `results.tar.gz` snapshot |
-| `push_kernel.sh`: `refusing: ... RUNNING` | a run of this kernel is still going | wait, or `FORCE=1` (effect on the running version UNVERIFIED) |
+| `push_kernel.sh`: `refusing: ... RUNNING` | a run of this kernel is still going | wait. `FORCE=1` starts a second, parallel run: the running version continues to its end, and `status` then shows only the newest (MEASURED) |
 | CLI: `Title must be at least five characters` | slug shorter than 5 characters | longer slug |
 | CLI: `Your kernel title does not resolve to the specified id` | title and slug differ | `push_kernel.sh` uses the slug as title |
 | `kaggle` warns that it is outdated, inside the session | the image ships 2.0.2 | harmless |
+| `kaggle kernels logs` prints nothing while the run is going | without `-f` the CLI shows only finished runs | `kaggle kernels logs -f` or `station_ctl.sh logs <KERNEL> -f` (CLI 2.2.5) |
+| `status` says `COMPLETE` but an older version is still working | a `FORCE=1` push started a parallel run; status shows the newest version only | `kaggle kernels logs <OWNER>/<KERNEL_SLUG>/<N>` after it ends; cancel the old one in the web UI if needed |
 | home: `REFUSING: credential-looking paths` from `pack_kit.sh` | a path matched the credential pattern | `EXCLUDES="pattern ..."`, or rename an innocent file |
 
 ## Diagnose locally first

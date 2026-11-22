@@ -49,6 +49,15 @@ scripts/station_ctl.sh status <OWNER>/<KERNEL_SLUG>          # wait for a final 
 scripts/station_ctl.sh output <OWNER>/<KERNEL_SLUG> ./run_output
 ```
 
+Measured end of the 2026-11-22 template run (`SOFT_STOP_LEAD_MIN = 3`, deadline moved earlier through the control
+file): `STOP files written` at the soft stop, the shell worker saw its STOP 8 s later, `deadline: SIGTERM to all
+workers` 6 s after the deadline, `workers done {'S1': 143, 'C1': 0}` 30 s later (one `LOOP_S`), `results packed`,
+final outbox version, `done` 40 s after the deadline. Status turned `COMPLETE` about 25 s after `done`, and
+`kaggle kernels output` returned the whole `out/` at once (MEASURED).
+
+The output of every version stays downloadable after later pushes: `kaggle kernels output <OWNER>/<KERNEL_SLUG>/<N>`
+(MEASURED). A push while a run is going does not stop that run; both versions run in parallel (MEASURED).
+
 What is discarded when the run ends (UNVERIFIED, per Kaggle docs; consistent with what we saw): everything outside
 `/kaggle/working`, including the unpacked kit, installed packages, the Claude Code install and `~/.claude`.
 Only datasets and the outputs of earlier versions persist. Earlier outputs can be attached as `kernel_sources`.

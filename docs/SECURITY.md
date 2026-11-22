@@ -11,7 +11,7 @@ those is a trust boundary.
 | Claude token | worker environments; keys dataset | every agent; anyone signed in to the Kaggle account | your subscription is used until you revoke the token |
 | Project API key | `/root/.config/project/api_key` (0600); keys dataset | every agent (root); the account | actions on the project service in your name |
 | Keys dataset | Kaggle storage, all versions | **anyone signed in to the account**; collaborators; agents in any run that attaches it | all of the above |
-| Kaggle session login | env `KAGGLE_*_TOKEN` in every process; the preinstalled CLI works as the owner (MEASURED, read) | every agent | read access (MEASURED) and maybe write or delete access (UNVERIFIED) to your kernels and datasets, for the session's lifetime |
+| Kaggle session login | env `KAGGLE_*_TOKEN` in every process; the preinstalled CLI works as the owner | every agent | read access and **write access** (MEASURED: `datasets download` and `datasets version` of private datasets of the owner) and maybe delete access (UNVERIFIED) to your kernels and datasets, for the session's lifetime |
 | `KAGGLE_JSON` (if you add it) | `/root/.station/kaggle/kaggle.json`; keys dataset | every agent; the account | full API access to the account until expired |
 | Control dataset | Kaggle storage | the account; the station | anyone who can write it is giving prompts to agents with root |
 | Private kit | `/kaggle/input`, unpacked tree | every agent; Kaggle | redistribution you had no right to make |

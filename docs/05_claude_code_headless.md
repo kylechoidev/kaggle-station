@@ -9,7 +9,7 @@ The kernel runs any `WORKER_CMD`. This page covers the Claude Code preset, which
 | install | `curl -fsSL https://claude.ai/install.sh \| bash` (`INSTALL_CMD`) | Claude Code 2.1.330; installs to `~/.local/share/claude/versions/<ver>` with `~/.local/bin/claude` as a symlink; about 364 MB; no Node.js |
 | PATH | `EXTRA_PATH = ['/root/.local/bin']` | - |
 | auth | env `CLAUDE_CODE_OAUTH_TOKEN=<token from claude setup-token>` | the `init` event reports `"apiKeySource": "none"` (subscription OAuth, no API key) |
-| probe | `claude -p "Reply with the single word OK" --model opus` (`PROBE_CMD`) | install + probe: 23 s |
+| probe | `claude -p "Reply with the single word OK" --model opus` (`PROBE_CMD`) | install + probe: 23 s (2026-11-22 template run: install 10 s, probe 5 s) |
 | runs as root | yes, no warnings that blocked work | MEASURED |
 
 The probe catches a bad or revoked token, missing internet and an exhausted usage limit before any worker starts.
@@ -32,6 +32,22 @@ WORKER_CMD = ['claude', '-p', '{BRIEF}', '--model', 'opus',
 | `--allowedTools Bash,Read,Write,Edit,Glob,Grep` | these tools need no approval. `Bash` means any command as root in the container. | MEASURED |
 | tools not in the list | need an approval that headless mode cannot give, so they are refused | UNVERIFIED (no denials seen in the measured run). The `init` event still *lists* every built-in tool. |
 | `--dangerously-skip-permissions` | not needed, not used | - |
+
+### Mixed workers in one run
+
+`WORKER_CMD` is one command for every worker. To run different programs (for example a plain shell job next to
+Claude Code), dispatch on the worker name, which the kernel exports as `STATION_WORKER`. Pass the brief as a file
+(`{BRIEF_FILE}`), not as `{BRIEF}` text: the text would be pasted into the `bash -c` string and break on quotes.
+
+```python
+WORKER_CMD = ['bash', '-c', 'case "$STATION_WORKER" in S1) exec bash {WORKDIR}/hello/loop.sh ;; '
+              '*) exec claude -p "$(cat {BRIEF_FILE})" --model opus --output-format stream-json --verbose '
+              '--permission-mode acceptEdits --allowedTools Bash,Read,Write,Edit,Glob,Grep ;; esac']
+WORKERS = {'S1': 'shell loop', 'C1': 'write the current UTC time and nproc to agents/C1/result.txt, then reply DONE'}
+```
+
+MEASURED in the 2026-11-22 template run: both workers ran; C1 (Claude Code 2.1.330, Opus) finished in 5 s with
+2 turns and 1 `Bash` call, rc 0; S1 ran until the deadline kill, rc 143.
 
 The kernel wraps each worker as `timeout -k 30 <cap_s> <cmd>` in its own process group
 (`start_new_session=True`). `cap_s` is the time left to `MAX_HOURS`, as a safety net. The real deadline is enforced

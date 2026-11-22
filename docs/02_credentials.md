@@ -37,7 +37,7 @@ value lives.
 | Someone else signed in to the same account (a shared account) | **can download it** | can see it in the editor and attach it |
 | Kaggle (the platform) | stores it | stores it |
 | Every agent in the run (root, `Bash` pre-approved) | can read `/kaggle/input/**` | can call `get_secret` in an editor run, and can read process environments as root |
-| Every agent in the run, through the session's own Kaggle login | can probably download your other datasets too (read access MEASURED for `kernels list`; dataset download UNVERIFIED) | same |
+| Every agent in the run, through the session's own Kaggle login | can download your other private datasets and publish new versions of them (MEASURED: the station itself does both with the session login) | same |
 | The public | no, as long as the dataset stays private and is never forked or made public | no |
 
 What follows from that: use a Kaggle account that you alone control. Give the station a Claude token used only

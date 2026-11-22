@@ -17,11 +17,11 @@ push_kernel.sh     --- kaggle kernels push ------------> station_kernel.py
                                                            1 credentials  2 unpack  3 setup  4 GATE
                                                            5 install + probe  6 N workers
 station_ctl send/deadline/stop-all                         7 control loop (every LOOP_S):
-                   --- new control dataset version ---->     re-read control (UNVERIFIED), STOP files,
+                   --- new control dataset version ---->     re-read control (MEASURED), STOP files,
                                                              deadline kill, status.json, snapshots
 station_ctl status <-- kaggle kernels status ----------    RUNNING / COMPLETE / ERROR  (MEASURED)
-station_ctl logs   <-- kaggle kernels logs ------------    "STATION {...}" lines        (UNVERIFIED live)
-station_ctl progress <- outbox dataset version --------    status.json                  (UNVERIFIED)
+station_ctl logs -f <- kaggle kernels logs -f ---------    "STATION {...}" lines        (MEASURED live)
+station_ctl progress <- outbox dataset version --------    status.json                  (MEASURED)
 station_ctl output <-- kaggle kernels output ----------  8 /kaggle/working/out/: results.tar.gz, logs
 ```
 
@@ -29,7 +29,7 @@ station_ctl output <-- kaggle kernels output ----------  8 /kaggle/working/out/:
 
 | Tag | Meaning |
 |---|---|
-| **MEASURED** | Measured inside a live Kaggle CPU batch session on 2026-11-22 (5 Claude Code agents on a decompilation project), or read directly from the named CLI version's help or source. Values are given. |
+| **MEASURED** | Measured inside a live Kaggle CPU batch session on 2026-11-22 (5 Claude Code agents on a decompilation project, or the 30-minute end-to-end test of this template with one shell worker and one Claude Code worker), or read directly from the named CLI version's help or source. Values are given. |
 | **OBSERVED** | Seen by the operator while building that run (failed attempts, error messages). Not re-measured. |
 | **UNVERIFIED** | Not checked by us. This includes Kaggle documentation claims. Treat it as a question. |
 
@@ -85,10 +85,15 @@ Expect about **5 minutes** from container start to all workers running (MEASURED
   deadline and soft stop in a control file, an allow-listed results archive, credentials looked up by name, and
   process-group kills.
 - **The template has been tested offline** (`tests/run_tests.sh`, including a full `main()` run with plain bash
-  workers and a stub `kaggle` CLI). **It has not yet been run end to end on Kaggle.** Do a 30-minute run with one
-  worker first (`RUN_HOURS = 0.5`).
-- The Kaggle-native live channels (control dataset re-download, outbox dataset, live `kernels logs`) are
-  **UNVERIFIED**. Without them the station still works fire-and-forget: everything comes back in the run output.
+  workers and a stub `kaggle` CLI) **and run end to end on Kaggle** (2026-11-22: a fresh clone, the runbook step by
+  step, a 4 KB kit, one shell worker and one Claude Code worker, about 22 minutes of CPU session, ended by the
+  deadline that was moved through the control file). Still do a 30-minute run on your own account first
+  (`RUN_HOURS = 0.5`).
+- The Kaggle-native live channels are **MEASURED** to work with the session's built-in login, no extra key:
+  `kaggle kernels logs -f` (CLI 2.2.5) shows `STATION` lines live, the session downloads newer control dataset
+  versions (applied 36 s after publishing), and it publishes outbox dataset versions. The run output is downloadable
+  as soon as the run is `COMPLETE`, per version. A push while a run is going starts a parallel run; it does not stop
+  the old one. If a channel fails on your account, the station still works fire-and-forget.
 
 Placeholders: `<OWNER>` (your Kaggle username), `<KERNEL_SLUG>`, `<KIT_DATASET>`, `<KEYS_DATASET>`,
 `<CONTROL_DATASET>`, `<OUTBOX_DATASET>`, `<RELAY_USER>`, `<RELAY_HOST>`. The repository contains no credentials,

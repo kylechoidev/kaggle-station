@@ -9,7 +9,8 @@
 #   TIMEOUT_S    per-run limit passed as `kaggle kernels push -t` (the platform maximum still applies)
 #   STAGE_DIR    keep the generated folder here instead of a temp dir (for review)
 #   DRY_RUN=1    write and print the metadata, do not push
-#   FORCE=1      push even if `kaggle kernels status` says the kernel is running or queued
+#   FORCE=1      push even if `kaggle kernels status` says the kernel is running or queued. The running version
+#                keeps running in parallel (MEASURED); `status` then reports only the newest version.
 set -euo pipefail
 [ $# -ge 2 ] || { awk 'NR>1 && /^set -euo/{exit} NR>1' "$0"; exit 2; }
 ID=$1; shift

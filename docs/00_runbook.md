@@ -52,7 +52,7 @@ Optional extra names, added as `NAME=file` arguments:
 | Name | Use |
 |---|---|
 | `PROJECT_API_KEY` | written to `/root/.config/project/api_key` (0600) for your workers (`FILE_CREDENTIALS`) |
-| `KAGGLE_JSON` | a Kaggle API credential file the **station** uses for its own `kaggle` calls (control download, outbox). Only needed if the session's built-in authentication cannot do those calls (UNVERIFIED either way, docs/06). |
+| `KAGGLE_JSON` | a Kaggle API credential file the **station** uses for its own `kaggle` calls (control download, outbox). Normally **not needed**: the session's built-in login did both (MEASURED, docs/06). Add it only if those calls fail on your account. |
 | `RELAY_SSH_KEY` | appendix A only |
 
 Read docs/02 before adding anything: everyone signed in to the account can read this dataset.
@@ -63,8 +63,9 @@ Read docs/02 before adding anything: everyone signed in to the account can read 
 kaggle datasets status <OWNER>/<KEYS_DATASET>
 ```
 
-Expected: `ready`. Do this after every dataset create or version, before you push.
-`--format json` also prints `current_version_number` (MEASURED, CLI 2.2.5 help).
+Expected: `ready` (printed without a trailing newline, so several calls in a row run together, MEASURED). Do this
+after every dataset create or version, before you push. `--format json` prints
+`{"status": "ready", "current_version_number": 1}` (MEASURED, CLI 2.2.5).
 
 ## 4. Kit (home)
 
@@ -84,6 +85,7 @@ Expected (the numbers are from the measured run's base kit):
 packing /home/<you>/project/toolchain -> ./ds_kit_base/kit_base.tar.zst
 raw 2.4G, archive 477M, <S> s
 <sha256>  kit_base.tar.zst
+Your private Dataset is being created. Please check progress at https://www.kaggle.com/datasets/<OWNER>/<KIT_BASE>
 uploaded; wait for: kaggle datasets status <OWNER>/<KIT_BASE>  -> ready
 ```
 
@@ -103,10 +105,11 @@ scripts/station_ctl.sh init-control <OWNER>/<CONTROL_DATASET> ./ctl
 kaggle datasets status <OWNER>/<CONTROL_DATASET>
 ```
 
-Expected: `control dataset <OWNER>/<CONTROL_DATASET> ready in ./ctl; ...`, then `ready`. `./ctl/station_control.json`
+Expected (MEASURED, CLI 2.2.5): `Your private Dataset is being created. Please check progress at ...`, then
+`control dataset <OWNER>/<CONTROL_DATASET> ready in ./ctl; ...`, then `ready`. `./ctl/station_control.json`
 starts at `seq` 1 with no orders. Format: docs/11.
 
-Optional, for progress without your own server (UNVERIFIED path, docs/06):
+Optional, for progress without your own server (MEASURED to work with the session login, docs/06):
 
 ```bash
 scripts/station_ctl.sh init-outbox <OWNER>/<OUTBOX_DATASET> ./outbox
@@ -140,9 +143,11 @@ scripts/push_kernel.sh <OWNER>/<KERNEL_SLUG> <OWNER>/<KIT_BASE> <OWNER>/<KIT_WOR
           <OWNER>/<KEYS_DATASET> <OWNER>/<CONTROL_DATASET>
 ```
 
-Expected: the metadata JSON, then something like `Kernel version 1 successfully pushed. Please check progress at
-https://www.kaggle.com/code/<OWNER>/<KERNEL_SLUG>` (wording UNVERIFIED). The script refuses if `kaggle kernels status`
-reports a running or queued run (set `FORCE=1` to override; what a push does to a running version is UNVERIFIED).
+Expected: the metadata JSON, then `Kernel version 1 successfully pushed.  Please check progress at
+https://www.kaggle.com/code/<OWNER>/<KERNEL_SLUG>` (MEASURED, CLI 2.2.5), then the `status:` and `output:` hints. The script refuses if `kaggle kernels status`
+reports a running or queued run (`refusing: <OWNER>/<KERNEL_SLUG> has status "KernelWorkerStatus.RUNNING" ...`,
+MEASURED). `FORCE=1` overrides it, but a push while a run is going does **not** stop it: both versions run at once, each in its own session, and `kaggle kernels status` then reports only the newest version (MEASURED). Version N's logs and output stay readable as
+`<OWNER>/<KERNEL_SLUG>/<N>`.
 
 Slug rules (MEASURED, CLI 2.2.5 source): the title must be at least 5 characters, and the slug should equal the
 slugified title. The script uses the slug as the title.
@@ -155,14 +160,14 @@ scripts/station_ctl.sh status <OWNER>/<KERNEL_SLUG>
 
 | Output contains | Meaning |
 |---|---|
-| `QUEUED` | waiting for a machine (UNVERIFIED wording) |
+| `QUEUED` | waiting for a machine (UNVERIFIED wording; not seen: a CPU push showed `RUNNING` within 10 s, MEASURED) |
 | `RUNNING` | the run is going (MEASURED: `KernelWorkerStatus.RUNNING`) |
-| `COMPLETE` | finished; output can be downloaded (UNVERIFIED wording) |
+| `COMPLETE` | finished; output can be downloaded (MEASURED: `KernelWorkerStatus.COMPLETE`, output available at once) |
 | `ERROR` | the kernel exited non-zero, for example gate or probe failed; read `out/setup.log` in the output |
 | `CANCEL` | cancelled in the web UI (the CLI has no cancel command, MEASURED for 2.0.2 and 2.2.5) |
 
 Poll every few minutes. While the run is going, `kaggle kernels output` and `kaggle kernels files` return nothing
-(MEASURED, CLI 2.0.2).
+(MEASURED, CLI 2.0.2 and 2.2.5). For live lines use step 10.
 
 Measured timeline from container start (docs/04 has the full table): kit unpacked at +25 s, gate finished at
 +3 min 27 s, probe OK at +3 min 50 s, all 5 workers started by +5 min 10 s.
@@ -178,19 +183,21 @@ scripts/station_ctl.sh stop-all  ./ctl on
 ```
 
 Each command bumps `seq` and publishes a new control dataset version. The kernel picks it up at its next poll
-(`CONTROL_POLL_S`, default 300 s), **if** a batch session can download a dataset's newest version (UNVERIFIED,
-docs/06). A worker reads its INBOX at its next batch boundary, which takes minutes.
+(`CONTROL_POLL_S`, default 300 s). MEASURED with `CONTROL_POLL_S = 120`: applied 36 s after `station_ctl.sh` returned
+(`control: deadline ...`, `control: message m2 -> S1` in the log). A worker reads its INBOX at its next batch
+boundary, which takes minutes.
 
 ## 10. Progress (home, optional)
 
 ```bash
-scripts/station_ctl.sh logs     <OWNER>/<KERNEL_SLUG>             # STATION {...} lines, if live logs work
-kaggle kernels logs -f <OWNER>/<KERNEL_SLUG>                      # CLI 2.2.5: "Stream live execution logs"
+scripts/station_ctl.sh logs     <OWNER>/<KERNEL_SLUG> -f          # = kaggle kernels logs -f (CLI 2.2.5): live lines
 scripts/station_ctl.sh progress <OWNER>/<OUTBOX_DATASET> ./outbox # if OUTBOX_DATASET is set
 ```
 
-All three are UNVERIFIED while a run is going (docs/06). MEASURED with CLI 2.0.2: `kernels logs` returned nothing
-during the run.
+MEASURED (2026-11-22, CLI 2.2.5 at home): `logs -f` streams `setup.log` lines and `STATION {...}` lines within seconds
+and exits when the run ends. `progress` prints `Dataset URL: ...` and `License(s): other`, then the latest
+`status.json`. Without `-f`, `kaggle kernels logs` prints nothing during the run (CLI 2.0.2 and 2.2.5) and the whole
+log as a JSON array after the end.
 
 ## 11. Collect (home, after COMPLETE or ERROR)
 
@@ -202,8 +209,10 @@ mkdir review && python3 -I -c 'import tarfile,sys; tarfile.open(sys.argv[1]).ext
 python3 -I scripts/stream_summary.py ./run_output/out/logs/*.log
 ```
 
-Expected in `out/`: `setup.log`, `status.json` (with `"final": true` if the kernel reached the end),
-`gate_station.json`, `logs/<WORKER>.log`, `results.tar.gz`. Layout: docs/11.
+Expected (MEASURED): `./run_output/<KERNEL_SLUG>.log` (the kernel's stdout) and in `out/`: `setup.log`,
+`status.json` (with `"final": true` if the kernel reached the end), `gate_station.json` (only with a gate),
+`logs/<WORKER>.log`, `results.tar.gz`. Layout: docs/11. The output of an earlier version stays downloadable with
+`kaggle kernels output <OWNER>/<KERNEL_SLUG>/<N> -p <DIR> -o` (MEASURED).
 
 `filter="data"` needs Python 3.12+ (or a security-patched 3.8 to 3.11). Treat everything as untrusted (docs/SECURITY.md). Verify results with your authoritative check before you use them.
 
@@ -214,6 +223,7 @@ Expected in `out/`: `setup.log`, `status.json` (with `"final": true` if the kern
 | keys dataset, at the end of a campaign or after anything suspicious | `kaggle datasets delete <OWNER>/<KEYS_DATASET> -y` |
 | Claude token | revoke it in your Claude account settings (exact menu UNVERIFIED); create a new one for the next campaign |
 | control and outbox datasets | `kaggle datasets delete <OWNER>/<CONTROL_DATASET> -y` (or keep them and reset with `init-control` in a fresh dir) |
+| a test kernel | `kaggle kernels delete <OWNER>/<KERNEL_SLUG> -y` (deletes its versions and outputs) |
 | kit datasets you no longer need | `kaggle datasets delete <OWNER>/<KIT_...> -y` |
 
 Before the next run: `scripts/station_ctl.sh reset ./ctl`. An old `stop_all: true` would stop the new workers at

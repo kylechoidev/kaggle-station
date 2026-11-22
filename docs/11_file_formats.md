@@ -171,10 +171,11 @@ Every `STDOUT_PROGRESS_S` seconds. Filter: `kaggle kernels logs <OWNER>/<KERNEL_
 
 ```
 run_output/
+  <KERNEL_SLUG>.log          # the kernel's stdout/stderr as a JSON array of {"stream_name","time","data"} (MEASURED)
   out/
     setup.log
     status.json
-    gate_station.json
+    gate_station.json          # only when GATE_CMD is set
     logs/<WORKER>.log          # stream-json for Claude Code workers
     results.tar.gz             # paths relative to WORKDIR, e.g. agents/W1/REPORT.md, src/...
 ```

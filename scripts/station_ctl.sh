@@ -3,7 +3,8 @@
 #
 # Run state:
 #   station_ctl.sh status   <OWNER>/<KERNEL>             kaggle kernels status
-#   station_ctl.sh logs     <OWNER>/<KERNEL>             kaggle kernels logs (STATION lines; see docs/06)
+#   station_ctl.sh logs     <OWNER>/<KERNEL> [-f]        kaggle kernels logs; -f streams the running session
+#                                                        (CLI 2.2.5; without -f: empty until the run ends, docs/06)
 #   station_ctl.sh output   <OWNER>/<KERNEL> <DIR>       download the run output (after the run ends)
 # Control file (a private dataset holding station_control.json; schema in docs/11_file_formats.md):
 #   station_ctl.sh init-control <OWNER>/<CONTROL_DATASET> <DIR>   create DIR + the dataset (seq 1, no orders)
@@ -62,7 +63,9 @@ publish() {
 
 case $cmd in
   status) need 1 "$@"; kaggle kernels status "$1" ;;
-  logs)   need 1 "$@"; kaggle kernels logs "$1" ;;
+  logs)
+    need 1 "$@"
+    case ${2:-} in -f|--follow) kaggle kernels logs -f "$1" ;; '') kaggle kernels logs "$1" ;; *) usage ;; esac ;;
   output) need 2 "$@"; mkdir -p "$2"; kaggle kernels output "$1" -p "$2" -o ;;
   init-control)
     need 2 "$@"; mkdir -p "$2"
