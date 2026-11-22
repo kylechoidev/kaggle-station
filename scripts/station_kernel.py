@@ -1,0 +1,588 @@
+#!/usr/bin/env python3
+# station_kernel.py - generic "Kaggle station" kernel: run N long-lived worker processes (Claude Code or any
+# other command) on one Kaggle CPU session, steer them through a control file, and pack only allow-listed results.
+#
+# Typical setup: a home computer + a Kaggle account, nothing else.
+#   in:   private datasets attached via kernel-metadata.json "dataset_sources" (kit archives, keys, control file)
+#   ctl:  station_control.json (schema in docs/11_file_formats.md); re-read from a control dataset while running
+#   out:  /kaggle/working/out/  (run output: setup.log, status.json, logs, results.tar.gz)
+#         + optional outbox dataset versions and STATION lines on stdout (docs/06_control_and_progress.md)
+#
+# Pipeline: credentials -> unpack kit -> setup shell -> equivalence gate -> worker tool install + probe
+#           -> start N workers -> control loop (control file, soft stop, deadline, status, snapshots) -> results
+#
+# Edit only the CONFIG block. Nothing in it is secret: credentials are read at run time (docs/02_credentials.md).
+# Anything fixed here cannot be changed while the run is going; values that must stay changeable
+# (deadline, soft stop, messages, stop-all) live in the control file.
+import datetime as dt
+import fnmatch
+import glob
+import json
+import os
+import shutil
+import signal
+import subprocess
+import sys
+import tarfile
+import time
+import zipfile
+
+# =============================================================================================== CONFIG
+# --- time -------------------------------------------------------------------------------------------
+RUN_HOURS = 3.0               # initial deadline = kernel start + RUN_HOURS (the control file may move it)
+MAX_HOURS = 11.0              # hard cap; the control file can never move the deadline past start + MAX_HOURS.
+                              # Keep it below the platform session limit minus ~15 min for setup and packing.
+SOFT_STOP_LEAD_MIN = 20       # default soft stop = deadline - this many minutes
+KILL_GRACE_S = 90             # at the deadline: SIGTERM each worker's process group, SIGKILL after this
+LOOP_S = 30                   # control loop period
+
+# --- inputs -----------------------------------------------------------------------------------------
+INPUT_ROOT = '/kaggle/input'  # attached datasets are mounted below this (sub-path varies: find by name)
+WORKDIR = '/home/station/project'     # kit is unpacked here (NOT under /kaggle/working: it is not a result)
+KIT_ARCHIVES = ['kit_base.tar.zst', 'kit_work.tar.zst']   # file names searched under INPUT_ROOT, in order
+REMOVE_AFTER_UNPACK = []      # paths relative to WORKDIR, e.g. ['toolchain/venv'] (a copied venv shadows python3)
+PATH_LINKS = {}               # {'/abs/path/on/reference/machine': 'relative/path/in/WORKDIR'} -> symlinks
+SETUP_SHELL = r"""
+# runs with /bin/bash -e in WORKDIR after unpacking. Examples:
+# python3 -m pip install -q --break-system-packages <package>
+# chown -R "$(id -u):$(id -g)" wine-prefix
+true
+"""
+ENV_PROBE = 'command -v python3; python3 -c "import sys; print(sys.version.split()[0])"'   # logged after setup
+
+# --- credentials (names; values come from files of that name under INPUT_ROOT, else Kaggle Secrets) ---
+REQUIRED_CREDENTIALS = ['CLAUDE_CODE_OAUTH_TOKEN']
+OPTIONAL_CREDENTIALS = ['PROJECT_API_KEY', 'KAGGLE_JSON']
+WORKER_ENV_CREDENTIALS = ['CLAUDE_CODE_OAUTH_TOKEN']        # passed to workers through their environment
+FILE_CREDENTIALS = {'PROJECT_API_KEY': '/root/.config/project/api_key'}   # written mode 0600 if present
+DROP_ENV_PREFIXES = ('KAGGLE_USER_SECRETS_TOKEN', 'KAGGLE_DATA_PROXY_TOKEN', 'KAGGLE_API_V1_TOKEN')
+                              # removed from worker environments (hygiene only: root can still read them)
+
+# --- equivalence gate (set GATE_CMD = None to skip) -------------------------------------------------
+GATE_CMD = 'python3 -I tools/gate_check.py gate/sample.txt > gate/station.json'   # runs in WORKDIR
+GATE_REFERENCE = 'gate/reference.json'   # {"item": {"status": "..."}, ...} from the reference machine
+GATE_OUTPUT = 'gate/station.json'
+GATE_FIELD = 'status'
+GATE_TIMEOUT_S = 1800
+
+# --- workers ----------------------------------------------------------------------------------------
+INSTALL_CMD = 'curl -fsSL https://claude.ai/install.sh | bash'   # None for a tool already in the kit/image
+EXTRA_PATH = ['/root/.local/bin']
+PROBE_CMD = 'claude -p "Reply with the single word OK" --model opus'   # None to skip
+PROBE_EXPECT = 'OK'
+WORKER_CMD = ['claude', '-p', '{BRIEF}', '--model', 'opus',
+              '--output-format', 'stream-json', '--verbose',
+              '--permission-mode', 'acceptEdits',
+              '--allowedTools', 'Bash,Read,Write,Edit,Glob,Grep']
+# Tokens replaced in each element: {NAME} {ASSIGNMENT} {BRIEF} (text) {BRIEF_FILE} (path) {WORKDIR}.
+# Any program works, e.g. ['bash', '-c', 'make -C {WORKDIR} job-{ASSIGNMENT}'].
+WORKERS = {                   # name -> assignment (each worker gets agents/<name>/ for its control files)
+    'W1': 'work queue slice 1',
+    'W2': 'work queue slice 2',
+    'W3': 'work queue slice 3',
+    'W4': 'work queue slice 4',
+}
+WORKER_STAGGER_S = 20
+BRIEF_TEMPLATE = """You are worker {NAME} of a decompilation project, running headless on a Kaggle CPU session.
+Working directory: {WORKDIR}. Read the project's agent documentation first.
+Assignment: {ASSIGNMENT}.
+Control files - check them at every batch boundary:
+- agents/{NAME}/INBOX.md  messages from the operator (newest last); follow them unless they break these rules.
+- agents/{NAME}/STOP      if it exists: start nothing new, finish or release the item in flight, write
+                          agents/{NAME}/REPORT.md, then end.
+Write one line to agents/{NAME}/STATUS.txt at every batch boundary. Keep durable lessons in agents/{NAME}/LESSONS.md.
+At most ONE heavy process (compile, test) of your own at a time: 4 vCPUs are shared by all workers.
+Never print credentials. Inputs that are not yours to publish stay inside this session.
+"""
+
+# --- control and progress ---------------------------------------------------------------------------
+CONTROL_FILE = 'station_control.json'   # read at start from INPUT_ROOT (attached control dataset), if present
+CONTROL_DATASET = None        # '<KAGGLE_USER>/<CONTROL_DATASET>': re-downloaded every CONTROL_POLL_S (UNVERIFIED)
+CONTROL_POLL_S = 300
+OUTBOX_DATASET = None         # '<KAGGLE_USER>/<OUTBOX_DATASET>': status versions every OUTBOX_EVERY_S (UNVERIFIED)
+OUTBOX_EVERY_S = 1800
+STDOUT_PROGRESS_S = 300       # print one "STATION {...}" JSON line this often (for `kaggle kernels logs`)
+RELAY_TARGET = None           # appendix A only: 'user@host' with an rrsync-forced key (credential RELAY_SSH_KEY)
+
+# --- results ----------------------------------------------------------------------------------------
+OUT = '/kaggle/working/out'
+PRIVATE_DIR = '/root/.station'        # station-private scratch (control downloads, outbox, kaggle config, relay key)
+RESULT_GLOBS = ['agents/*/*', 'src/**/*']                    # relative to WORKDIR
+RESULT_SUFFIXES = ('.txt', '.md', '.tsv', '.json', '.jsonl', '.c', '.cpp', '.h', '.hpp', '.py', '.sh')
+RESULT_EXCLUDE_GLOBS = ['*/STOP', '*/BRIEF.md', '*.key', '*.pem', '*token*', '*secret*', '*api_key*']
+RESULT_MAX_FILE_BYTES = 2_000_000
+RESULT_ONLY_NEW_OR_CHANGED = True     # skip files that came unchanged from the kit
+SNAPSHOT_EVERY_S = 1800
+# ============================================================================================ END CONFIG
+
+UTC = dt.timezone.utc
+STATE = {'start': None, 'deadline': None, 'soft_stop': None, 'cap': None, 'stop_all': False,
+         'control_seq': -1, 'delivered': set(), 'soft_stopped': False, 'log': None}
+
+
+def now():
+    return dt.datetime.now(UTC)
+
+
+def iso(t):
+    return t.strftime('%Y-%m-%dT%H:%M:%SZ') if t else None
+
+
+def log(*a):
+    s = '%s %s' % (now().strftime('%H:%M:%S'), ' '.join(str(x) for x in a))
+    print(s, flush=True)
+    if STATE['log']:
+        STATE['log'].write(s + '\n')
+        STATE['log'].flush()
+
+
+def sh(cmd, check=True, env=None, timeout=None, cwd=None):
+    """Run through /bin/bash (shell=True alone uses /bin/sh, where `source` fails with rc 127)."""
+    try:
+        r = subprocess.run(cmd, shell=True, executable='/bin/bash', capture_output=True, text=True,
+                           env=env, timeout=timeout, cwd=cwd)
+    except subprocess.TimeoutExpired:
+        log('TIMEOUT', cmd[:120])
+        if check:
+            sys.exit(1)
+        return subprocess.CompletedProcess(cmd, 124, '', 'timeout')
+    if r.returncode and check:
+        log('FAILED rc', r.returncode, cmd[:120], r.stdout[-800:], r.stderr[-800:])
+        sys.exit(1)
+    return r
+
+
+def find_input(name, root=None):
+    hits = sorted(glob.glob(os.path.join(root or INPUT_ROOT, '**', name), recursive=True))
+    return hits[0] if hits else None
+
+
+def credential(name, required=True, root=None):
+    """File named <name> under INPUT_ROOT first, then a Kaggle Secret. The value is never logged."""
+    p = find_input(name, root)
+    if p and os.path.isfile(p):
+        with open(p) as f:
+            return f.read().strip()
+    try:
+        from kaggle_secrets import UserSecretsClient   # only works in runs started from the web editor
+        v = UserSecretsClient().get_secret(name)
+        if v:
+            return v.strip()
+    except Exception:
+        pass
+    if required:
+        log('missing credential', name, '- a file of that name in an attached private dataset, or a Kaggle Secret')
+        sys.exit(1)
+    return None
+
+
+def parse_utc(s):
+    t = dt.datetime.fromisoformat(str(s).strip().replace('Z', '+00:00'))
+    return t if t.tzinfo else t.replace(tzinfo=UTC)
+
+
+def apply_control(ctl, state, agents_dir, workers, t_now):
+    """Apply one control document. Returns a list of human-readable actions (for the log).
+
+    seq must increase; a document whose seq is not greater than the last applied one is ignored entirely.
+    deadline_utc is capped at state['cap']; soft_stop_utc is capped at the deadline. Messages are delivered
+    once per id. stop_all=true writes STOP for every worker; stop_all=false after a soft stop lifts it.
+    """
+    acts = []
+    seq = int(ctl.get('seq', 0))
+    if seq <= state['control_seq']:
+        return acts
+    state['control_seq'] = seq
+    if ctl.get('deadline_utc'):
+        d = min(parse_utc(ctl['deadline_utc']), state['cap'])
+        state['deadline'] = d
+        acts.append('deadline %s' % iso(d))
+        if not ctl.get('soft_stop_utc'):
+            state['soft_stop'] = d - dt.timedelta(minutes=SOFT_STOP_LEAD_MIN)
+    if ctl.get('soft_stop_utc'):
+        state['soft_stop'] = min(parse_utc(ctl['soft_stop_utc']), state['deadline'])
+        acts.append('soft stop %s' % iso(state['soft_stop']))
+    was = state['stop_all']
+    state['stop_all'] = bool(ctl.get('stop_all', False))
+    if state['stop_all'] and not was:
+        acts.append('stop_all')
+    if state['soft_stopped'] and not state['stop_all'] and state['soft_stop'] > t_now:
+        for w in workers:   # stop moved later: lift STOP files written by the station
+            p = os.path.join(agents_dir, w, 'STOP')
+            if os.path.exists(p):
+                with open(p) as f:
+                    if f.read().startswith('station'):
+                        os.remove(p)
+        state['soft_stopped'] = False
+        acts.append('soft stop lifted')
+    for m in ctl.get('messages') or []:
+        mid, to, text = str(m.get('id', '')), m.get('to', '*'), m.get('text', '')
+        if not mid or mid in state['delivered'] or not text:
+            continue
+        targets = list(workers) if to == '*' else [to] if to in workers else []
+        for w in targets:
+            os.makedirs(os.path.join(agents_dir, w), exist_ok=True)
+            with open(os.path.join(agents_dir, w, 'INBOX.md'), 'a') as f:
+                f.write('\n## %s UTC - message %s\n%s\n' % (t_now.strftime('%Y-%m-%d %H:%M'), mid, text.rstrip()))
+        state['delivered'].add(mid)
+        acts.append('message %s -> %s' % (mid, ','.join(targets) or 'nobody'))
+    return acts
+
+
+def soft_stop_due(state, t_now):
+    return state['stop_all'] or t_now >= state['soft_stop']
+
+
+def write_stop_files(agents_dir, workers, reason):
+    for w in workers:
+        os.makedirs(os.path.join(agents_dir, w), exist_ok=True)
+        with open(os.path.join(agents_dir, w, 'STOP'), 'w') as f:
+            f.write('station %s %s\n' % (reason, iso(now())))
+
+
+def read_control_file(path):
+    if not path or not os.path.exists(path):
+        return None
+    if zipfile.is_zipfile(path):
+        with zipfile.ZipFile(path) as z:
+            names = [n for n in z.namelist() if n.endswith(CONTROL_FILE)]
+            return json.loads(z.read(names[0])) if names else None
+    with open(path) as f:
+        return json.load(f)
+
+
+def manifest(root):
+    m = {}
+    for dp, _, fs in os.walk(root):
+        for f in fs:
+            p = os.path.join(dp, f)
+            try:
+                st = os.lstat(p)
+            except OSError:
+                continue
+            m[p] = (st.st_size, st.st_mtime_ns)
+    return m
+
+
+def select_results(workdir, kit_manifest):
+    """Allow-list: RESULT_GLOBS x RESULT_SUFFIXES, minus excludes, symlinks, oversized and unchanged kit files."""
+    out = []
+    for pat in RESULT_GLOBS:
+        for p in sorted(glob.glob(os.path.join(workdir, pat), recursive=True)):
+            if os.path.islink(p) or not os.path.isfile(p) or not p.endswith(RESULT_SUFFIXES):
+                continue
+            rel = os.path.relpath(p, workdir)
+            if any(fnmatch.fnmatch(rel, g) or fnmatch.fnmatch(os.path.basename(p), g) for g in RESULT_EXCLUDE_GLOBS):
+                continue
+            st = os.stat(p)
+            if st.st_size > RESULT_MAX_FILE_BYTES:
+                continue
+            if RESULT_ONLY_NEW_OR_CHANGED and kit_manifest.get(p) == (st.st_size, st.st_mtime_ns):
+                continue
+            if rel not in out:
+                out.append(rel)
+    return out
+
+
+def pack_results(workdir, kit_manifest, dest):
+    rels = select_results(workdir, kit_manifest)
+    tmp = dest + '.part'
+    with tarfile.open(tmp, 'w:gz') as tf:
+        for rel in rels:
+            tf.add(os.path.join(workdir, rel), arcname=rel)
+    os.replace(tmp, dest)   # a kill mid-pack never leaves a truncated results.tar.gz
+    return rels
+
+
+def kaggle_env():
+    """Environment for the station's own kaggle CLI calls: KAGGLE_JSON credential if given, else session auth."""
+    env = dict(os.environ)
+    kj = STATE.get('kaggle_json')
+    if kj:
+        d = os.path.join(PRIVATE_DIR, 'kaggle')
+        os.makedirs(d, mode=0o700, exist_ok=True)
+        p = os.path.join(d, 'kaggle.json')
+        with open(p, 'w') as f:
+            f.write(kj)
+        os.chmod(p, 0o600)
+        env['KAGGLE_CONFIG_DIR'] = d
+    return env
+
+
+def fetch_control():
+    """Live control: download the control dataset's current version (UNVERIFIED from inside a batch run)."""
+    d = os.path.join(PRIVATE_DIR, 'control')
+    shutil.rmtree(d, ignore_errors=True)
+    os.makedirs(d)
+    r = sh('kaggle datasets download %s -f %s -p %s -o -q' % (CONTROL_DATASET, CONTROL_FILE, d),
+           check=False, env=kaggle_env(), timeout=120)
+    if r.returncode:
+        log('control download failed rc', r.returncode, r.stderr.strip()[-200:])
+        return None
+    hits = glob.glob(d + '/*')
+    return read_control_file(hits[0]) if hits else None
+
+
+def push_outbox(status):
+    """Progress up: publish a new version of a private outbox dataset (UNVERIFIED from inside a batch run)."""
+    d = os.path.join(PRIVATE_DIR, 'outbox')
+    os.makedirs(d, exist_ok=True)
+    with open(d + '/dataset-metadata.json', 'w') as f:
+        json.dump({'id': OUTBOX_DATASET, 'title': OUTBOX_DATASET.split('/')[1], 'licenses': [{'name': 'other'}]}, f)
+    with open(d + '/status.json', 'w') as f:
+        json.dump(status, f, indent=1)
+    r = sh('kaggle datasets version -p %s -m "station %s" -q -d' % (d, status['utc']),
+           check=False, env=kaggle_env(), timeout=300)
+    log('outbox version rc', r.returncode, r.stderr.strip()[-200:] if r.returncode else '')
+
+
+def relay_sync(push_only=False):
+    """Appendix A: rsync over an rrsync-forced key to a server you own."""
+    ssh = 'ssh -i ' + os.path.join(PRIVATE_DIR, 'relay_key') + ' -o BatchMode=yes -o ConnectTimeout=15 -o StrictHostKeyChecking=accept-new'
+    sh('rsync -a --timeout=60 -e "%s" %s/status.json %s:outbox/' % (ssh, OUT, RELAY_TARGET), check=False, timeout=180)
+    if not push_only:
+        sh('rsync -a --timeout=60 -e "%s" %s:inbox/%s %s/relay_control.json' % (ssh, RELAY_TARGET, CONTROL_FILE, PRIVATE_DIR),
+           check=False, timeout=180)
+
+
+def status_doc(procs, workdir):
+    st = {'utc': iso(now()), 'start_utc': iso(STATE['start']), 'deadline_utc': iso(STATE['deadline']),
+          'soft_stop_utc': iso(STATE['soft_stop']), 'cap_utc': iso(STATE['cap']), 'stop_all': STATE['stop_all'],
+          'control_seq': STATE['control_seq'], 'messages_delivered': sorted(STATE['delivered']),
+          'load': loadavg(),
+          'workers': {}}
+    for w, p in procs.items():
+        sp = os.path.join(workdir, 'agents', w, 'STATUS.txt')
+        line = ''
+        if os.path.exists(sp):
+            with open(sp, errors='replace') as f:
+                line = f.read()[-300:].strip()
+        st['workers'][w] = {'alive': p.poll() is None, 'rc': p.returncode, 'status': line}
+    return st
+
+
+def loadavg():
+    try:
+        with open('/proc/loadavg') as f:
+            return f.read().split()[:3]
+    except OSError:
+        return None
+
+
+def zstd_stream_reader():
+    """Return f(fileobj) -> readable zstd stream: stdlib compression.zstd (3.14+) or the zstandard module."""
+    try:
+        from compression import zstd   # Python 3.14+
+        return lambda fh: zstd.ZstdFile(fh, 'rb')
+    except ImportError:
+        pass
+    try:
+        import zstandard
+    except ImportError:
+        sh('{0} -m pip install -q zstandard || {0} -m pip install -q --break-system-packages zstandard'.format(sys.executable),
+           check=False)
+        import zstandard
+    return lambda fh: zstandard.ZstdDecompressor().stream_reader(fh)
+
+
+def kill_group(p, sig):
+    try:
+        os.killpg(p.pid, sig)
+    except (ProcessLookupError, PermissionError):
+        pass
+
+
+def fill(s, name, assignment, brief, brief_file):
+    return (s.replace('{NAME}', name).replace('{ASSIGNMENT}', assignment).replace('{WORKDIR}', WORKDIR)
+            .replace('{BRIEF_FILE}', brief_file).replace('{BRIEF}', brief))
+
+
+def main():
+    STATE['start'] = now()
+    STATE['cap'] = STATE['start'] + dt.timedelta(hours=MAX_HOURS)
+    STATE['deadline'] = min(STATE['start'] + dt.timedelta(hours=RUN_HOURS), STATE['cap'])
+    STATE['soft_stop'] = STATE['deadline'] - dt.timedelta(minutes=SOFT_STOP_LEAD_MIN)
+    os.makedirs(OUT + '/logs', exist_ok=True)
+    os.makedirs(PRIVATE_DIR, mode=0o700, exist_ok=True)
+    STATE['log'] = open(OUT + '/setup.log', 'a')
+    log('station start', iso(STATE['start']), 'deadline', iso(STATE['deadline']), 'cap', iso(STATE['cap']))
+
+    # 1. credentials (values never logged)
+    creds = {n: credential(n) for n in REQUIRED_CREDENTIALS}
+    creds.update({n: credential(n, required=False) for n in OPTIONAL_CREDENTIALS})
+    STATE['kaggle_json'] = creds.get('KAGGLE_JSON')
+    for name, path in FILE_CREDENTIALS.items():
+        if creds.get(name):
+            os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+            with open(path, 'w') as f:
+                f.write(creds[name])
+            os.chmod(path, 0o600)
+    if RELAY_TARGET:
+        with open(os.path.join(PRIVATE_DIR, 'relay_key'), 'w') as f:
+            f.write(credential('RELAY_SSH_KEY') + '\n')
+        os.chmod(os.path.join(PRIVATE_DIR, 'relay_key'), 0o600)
+    log('credentials ok:', ', '.join(n for n, v in creds.items() if v))
+
+    # 2. unpack the kit: zstd stream -> tarfile (the zstd CLI is not on the image; the zstandard module is)
+    zstd_reader = zstd_stream_reader()
+    os.makedirs(WORKDIR, exist_ok=True)
+    for name in KIT_ARCHIVES:
+        p = find_input(name)
+        if not p:
+            log('missing input', name, 'under', INPUT_ROOT)
+            sys.exit(1)
+        t0 = time.time()
+        with open(p, 'rb') as fh, zstd_reader(fh) as zr, \
+                tarfile.open(fileobj=zr, mode='r|') as tf:
+            tf.extractall(WORKDIR, filter='tar')
+        log('extracted', name, '%.0f s' % (time.time() - t0))
+    for rel in REMOVE_AFTER_UNPACK:
+        shutil.rmtree(os.path.join(WORKDIR, rel), ignore_errors=True)
+    for src, rel in PATH_LINKS.items():
+        os.makedirs(os.path.dirname(src), exist_ok=True)
+        if not os.path.lexists(src):
+            os.symlink(os.path.join(WORKDIR, rel), src)
+    sh('set -e\n' + SETUP_SHELL, cwd=WORKDIR)
+    r = sh(ENV_PROBE, check=False, cwd=WORKDIR)
+    log('env probe:', (r.stdout + r.stderr).strip().replace('\n', ' | ')[:400])
+    kit_manifest = manifest(WORKDIR) if RESULT_ONLY_NEW_OR_CHANGED else {}
+    log('kit files', len(kit_manifest))
+
+    # 3. equivalence gate: identical verdicts to the reference machine, or no work at all
+    if GATE_CMD:
+        t0 = time.time()
+        r = sh(GATE_CMD, check=False, cwd=WORKDIR, timeout=GATE_TIMEOUT_S)
+        log('gate rc', r.returncode, '%.0f s' % (time.time() - t0), r.stderr.strip()[-300:])
+        try:
+            with open(os.path.join(WORKDIR, GATE_REFERENCE)) as f:
+                ref = json.load(f)
+            with open(os.path.join(WORKDIR, GATE_OUTPUT)) as f:
+                got = json.load(f)
+            diff = [k for k in ref if (ref[k] or {}).get(GATE_FIELD) != (got.get(k) or {}).get(GATE_FIELD)]
+            if not ref:
+                diff = ['empty reference']
+            log('gate compared', len(ref), 'differences', len(diff), diff[:5])
+        except Exception as e:   # a gate that cannot be evaluated is a failed gate
+            diff = ['gate unreadable: %r' % e]
+            log('gate unreadable', e)
+        if os.path.exists(os.path.join(WORKDIR, GATE_OUTPUT)):
+            shutil.copy(os.path.join(WORKDIR, GATE_OUTPUT), OUT + '/gate_station.json')
+        if diff:
+            log('GATE FAILED: no workers started')
+            sys.exit(1)
+
+    # 4. worker tool: install + probe
+    wenv = {k: v for k, v in os.environ.items() if not k.startswith(DROP_ENV_PREFIXES)}
+    wenv['PATH'] = ':'.join(EXTRA_PATH + [os.environ.get('PATH', '/usr/bin:/bin')])
+    wenv['HOME'] = os.environ.get('HOME', '/root')
+    for n in WORKER_ENV_CREDENTIALS:
+        if creds.get(n):
+            wenv[n] = creds[n]
+    if INSTALL_CMD:
+        t0 = time.time()
+        sh(INSTALL_CMD, env=wenv, timeout=600)
+        log('installed worker tool %.0f s' % (time.time() - t0))
+    if PROBE_CMD:
+        r = sh(PROBE_CMD, check=False, env=wenv, timeout=300, cwd=WORKDIR)
+        log('probe rc', r.returncode, repr(r.stdout.strip()[:40]))
+        if PROBE_EXPECT not in r.stdout:
+            log('PROBE FAILED (token? internet? usage limit?): no workers started')
+            sys.exit(1)
+
+    # 5. initial control file (attached dataset), then workers
+    agents = os.path.join(WORKDIR, 'agents')
+    try:
+        ctl = read_control_file(find_input(CONTROL_FILE))
+        if ctl:
+            for a in apply_control(ctl, STATE, agents, list(WORKERS), now()):
+                log('control:', a)
+    except Exception as e:
+        log('control file unreadable', e)
+    procs, logfiles = {}, []
+    for name, assignment in WORKERS.items():
+        d = os.path.join(agents, name)
+        os.makedirs(d, exist_ok=True)
+        brief = fill(BRIEF_TEMPLATE, name, assignment, '', '')
+        bf = os.path.join(d, 'BRIEF.md')
+        with open(bf, 'w') as f:
+            f.write(brief)
+        cmd = [fill(x, name, assignment, brief, bf) for x in WORKER_CMD]
+        cap_s = max(60, int((STATE['cap'] - now()).total_seconds()))   # safety net only; the loop enforces deadline
+        lf = open(os.path.join(OUT, 'logs', name + '.log'), 'w')
+        logfiles.append(lf)
+        procs[name] = subprocess.Popen(['timeout', '-k', '30', str(cap_s)] + cmd, cwd=WORKDIR,
+                                       env=dict(wenv, STATION_WORKER=name), stdout=lf, stderr=subprocess.STDOUT,
+                                       start_new_session=True)
+        log('started', name, 'pid', procs[name].pid)
+        time.sleep(WORKER_STAGGER_S)
+
+    # 6. control loop
+    last = {'ctl': 0.0, 'outbox': time.time(), 'stdout': 0.0, 'snap': time.time()}
+    killed_at = None
+    while any(p.poll() is None for p in procs.values()):
+        t = now()
+        ctl = None
+        if CONTROL_DATASET and time.time() - last['ctl'] >= CONTROL_POLL_S:
+            last['ctl'] = time.time()
+            ctl = fetch_control()
+        if RELAY_TARGET:
+            relay_sync()
+            ctl = read_control_file(os.path.join(PRIVATE_DIR, 'relay_control.json')) or ctl
+        if ctl:
+            try:
+                for a in apply_control(ctl, STATE, agents, list(procs), t):
+                    log('control:', a)
+            except Exception as e:
+                log('bad control document', e)
+        if soft_stop_due(STATE, t) and not STATE['soft_stopped']:
+            write_stop_files(agents, procs, 'stop_all' if STATE['stop_all'] else 'soft_stop')
+            STATE['soft_stopped'] = True
+            log('STOP files written')
+        if t >= STATE['deadline'] and killed_at is None:
+            log('deadline: SIGTERM to all workers')
+            for p in procs.values():
+                kill_group(p, signal.SIGTERM)
+            killed_at = time.time()
+        if killed_at and time.time() - killed_at > KILL_GRACE_S:
+            for p in procs.values():
+                if p.poll() is None:
+                    kill_group(p, signal.SIGKILL)
+        st = status_doc(procs, WORKDIR)
+        with open(OUT + '/status.json', 'w') as f:
+            json.dump(st, f, indent=1)
+        if time.time() - last['stdout'] >= STDOUT_PROGRESS_S:
+            last['stdout'] = time.time()
+            print('STATION ' + json.dumps({k: st[k] for k in ('utc', 'deadline_utc', 'soft_stop_utc', 'load')} |
+                                          {'alive': [w for w, v in st['workers'].items() if v['alive']]}), flush=True)
+        if OUTBOX_DATASET and time.time() - last['outbox'] >= OUTBOX_EVERY_S:
+            last['outbox'] = time.time()
+            push_outbox(st)
+        if time.time() - last['snap'] >= SNAPSHOT_EVERY_S:
+            last['snap'] = time.time()
+            try:
+                log('snapshot', len(pack_results(WORKDIR, kit_manifest, OUT + '/results.tar.gz')), 'files')
+            except Exception as e:
+                log('snapshot error', e)
+        time.sleep(LOOP_S)
+
+    # 7. results
+    log('workers done', {w: p.returncode for w, p in procs.items()})
+    for lf in logfiles:
+        lf.close()
+    rels = pack_results(WORKDIR, kit_manifest, OUT + '/results.tar.gz')
+    log('results packed', len(rels), 'files', os.path.getsize(OUT + '/results.tar.gz'), 'bytes')
+    st = status_doc(procs, WORKDIR)
+    st['final'] = True
+    with open(OUT + '/status.json', 'w') as f:
+        json.dump(st, f, indent=1)
+    if OUTBOX_DATASET:
+        push_outbox(st)
+    if RELAY_TARGET:
+        relay_sync(push_only=True)
+    log('done')
+    STATE['log'].close()
+    STATE['log'] = None
+
+
+if __name__ != 'station_kernel':   # Kaggle runs the file as a script; tests import it as a module
+    main()

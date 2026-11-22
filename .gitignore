@@ -1,0 +1,17 @@
+# never commit credentials, kits, control state or run outputs
+*token*.txt
+*.key
+*.pem
+kaggle.json
+station_relay
+station_relay.pub
+.env
+ds_*/
+ctl/
+outbox/
+review/
+*.tar.zst
+*.tar.zst.sha256
+run_output/
+__pycache__/
+*.pyc
