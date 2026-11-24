@@ -1,0 +1,14 @@
+{
+  "_comment": "Copy to swarm/providers.json (git-ignored) and fill in. key = PATH of a bearer key file (chmod 600), never the key. extra = merged into every request; use it to switch reasoning off (the parameter differs per provider). Probe with: python3 -I swarm/probe_providers.py --file swarm/providers.json",
+  "provider-a": {"url": "https://api.provider-a.example/v1", "model": "some-model:free",
+                 "key": "~/.config/swarm/keys/provider-a", "extra": {"reasoning_effort": "none"},
+                 "attr": "some-model:free (provider A)"},
+  "provider-b": {"url": "https://inference.provider-b.example/v1", "model": "org/some-model:free",
+                 "key": "~/.config/swarm/keys/provider-b", "extra": {"reasoning": {"enabled": false}},
+                 "attr": "org/some-model:free (provider B)"},
+  "openrouter": {"url": "https://openrouter.ai/api/v1", "model": "REPLACE-with-a-current-:free-model-id",
+                 "key": "~/.config/swarm/keys/openrouter", "extra": {"reasoning": {"enabled": false}},
+                 "attr": "REPLACE (OpenRouter, free)"},
+  "local": {"url": "http://127.0.0.1:8081/v1", "model": "local", "key": null,
+            "extra": {"chat_template_kwargs": {"enable_thinking": false}}, "attr": "a local llama.cpp server"}
+}

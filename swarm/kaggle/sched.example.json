@@ -1,0 +1,20 @@
+{
+  "_comment": "Copy to $SWARM_ROOT/kaggle/sched.json on the hub host. One entry per Kaggle account; home = a folder holding that account's .kaggle login (kept outside the repo). Accounts MUST be phone-verified, or their sessions get no internet (the worker then exits with NO_INTERNET). datasets: {user} is replaced by the account name.",
+  "kaggle_cli": "kaggle",
+  "accounts": [
+    {"user": "REPLACE-kaggle-user-1", "home": "~/kaggle-homes/acct1", "slots": 5, "agent_prefix": "KA", "enabled": true},
+    {"user": "REPLACE-kaggle-user-2", "home": "~/kaggle-homes/acct2", "slots": 5, "agent_prefix": "KB", "enabled": false}
+  ],
+  "slug_prefix": "swarm-worker",
+  "relay_prefix": "swarm",
+  "datasets": ["{user}/swarm-code", "{user}/swarm-keys"],
+  "provider": "provider-a",
+  "adapter": "swarm/adapters/pytests_example.py",
+  "worker_args": ["--threads", "2"],
+  "run_hours": 11.5,
+  "keys": {"PROVIDER_A_KEY": "~/.config/swarm/keys/provider-a", "RELAY_KEY": "~/.ssh/swarm_relay"},
+  "relay": {"root": "~/swarm_relay", "remote_root": "/REPLACE/absolute/path/of/swarm_relay", "user": "REPLACE-relay-user",
+            "host": "REPLACE-relay-host", "key_path": "~/.ssh/swarm_relay"},
+  "stale_min": 20,
+  "stale_action": "alert"
+}

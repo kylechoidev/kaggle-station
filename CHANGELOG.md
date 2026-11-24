@@ -2,6 +2,28 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions are dates until the owner picks a scheme.
 
+## [Unreleased] - 2026-11-24 (free-model swarm)
+
+### Added
+- docs/12_free_model_swarm.md: many workers on free hosted LLMs across Kaggle CPU sessions, an ARM VM, a VPS hub and
+  a laptop. Quickstart with expected output; the provider slot, probe-and-rank and the deal hunt at every start; the
+  worker loop and adapters; an always-on hub with no model (singletons with one assigned host, a watchdog with
+  restartable vs never-restart stop reasons, a results ledger, per-host verifier self-update with recheck and
+  rollback, a status page); Kaggle multi-slot scaling (5 CPU sessions per account, phone verification needed for
+  internet, relay, stale-slot watchdog, pause vs yield); a trigger-only coordinator with request files and handback
+  by heartbeat; dated pitfalls.
+- swarm/: `worker.py` (pluggable adapters), `adapters/pytests_example.py` (runnable example: functions that pass unit
+  tests), `adapters/decomp_pool_skeleton.py` (byte-matching decompilation pool, TODOs), `probe_providers.py`,
+  `yield_test.py`, `providers.example.json`, `hub/` (tick, host, guard, push_host, self_update, config example),
+  `kaggle/` (multi-slot scheduler, kernel wrapper, code bundler, config example), `coord/` (patrol loop, triggers,
+  brief template). All paths from `SWARM_ROOT` and one config file.
+- tests/test_swarm.py: offline end-to-end tests with a stub OpenAI-compatible server.
+
+### Tested
+- MEASURED 2026-11-24: the worker with the example adapter from a clean clone against a real free provider; the
+  offline suite. Not re-tested in this generic copy: the hub over ssh between real hosts, the Kaggle scheduler and
+  kernel on real accounts, the coordinator with a real model call (they ran in the source deployment).
+
 ## [Unreleased] - 2026-11-22 (live test)
 
 ### Verified on Kaggle

@@ -1,0 +1,33 @@
+{
+  "_comment": "Copy to $SWARM_ROOT/hub/config.json on the HUB host (the master; hub/tick.py copies it to ssh hosts). Paths are relative to SWARM_ROOT. Docs: docs/12_free_model_swarm.md.",
+  "hosts": {
+    "hub":    {"hostname": "REPLACE-output-of-hostname-on-the-hub", "ssh": null},
+    "armvm":  {"hostname": "REPLACE-hostname-of-the-vm", "ssh": "user@REPLACE-vm-address", "root": "/REPLACE/absolute/swarm/root", "coordinator": true},
+    "laptop": {"hostname": "REPLACE-laptop-hostname", "ssh": null, "push_only": true}
+  },
+  "python": null,
+  "env": {},
+  "providers_file": "hub/providers.json",
+  "default_provider": "provider-a",
+  "default_adapter": "swarm/adapters/pytests_example.py",
+  "default_worker_args": ["--phase", "AB", "--threads", "2"],
+  "max_restarts_per_day": 12,
+  "max_workers_per_host": {"hub": 1, "armvm": 3, "laptop": 2},
+  "ledger": {"export_glob": "work/results/*.json"},
+  "status_cmd": null,
+  "scheduler_stop_file": "kaggle/STOP_ALL",
+  "self_update": null,
+  "_self_update_example": {"published_cmd": "curl -fsS https://REPLACE/version", "install_dir": "verifier/current",
+                           "version_file": "VERSION", "fetch_cmd": "REPLACE-download-and-verify-into {dest}",
+                           "recheck_cmd": "REPLACE-recheck-a-sample", "every_min": 10},
+  "singletons": {
+    "status_http": {"type": "daemon", "host": "hub", "cmd": ["python3", "-m", "http.server", "8790", "--bind", "127.0.0.1", "--directory", "hub/www"],
+                    "match": ["http.server", "8790"], "stopfile": null},
+    "kaggle_sched": {"type": "cron", "host": "hub"}
+  },
+  "workers": [
+    {"agent": "W1", "host": "hub",   "provider": "provider-a", "adapter": "swarm/adapters/pytests_example.py", "args": ["--threads", "1"], "watch": true},
+    {"agent": "W2", "host": "armvm", "provider": "provider-a", "adapter": "swarm/adapters/pytests_example.py", "args": ["--threads", "2"], "watch": true},
+    {"agent": "W3", "host": "laptop", "provider": "provider-a", "adapter": "swarm/adapters/pytests_example.py", "args": [], "watch": false}
+  ]
+}

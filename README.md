@@ -49,6 +49,7 @@ station_ctl output <-- kaggle kernels output ----------  8 /kaggle/working/out/:
 | [docs/09_shutdown_and_results.md](docs/09_shutdown_and_results.md) | - | soft stop, deadline, cap, platform limit; the results allow-list |
 | [docs/10_troubleshooting.md](docs/10_troubleshooting.md) | - | exact error messages, their causes and fixes (including the failures from the measured run) |
 | [docs/11_file_formats.md](docs/11_file_formats.md) | - | `kernel-metadata.json`, `dataset-metadata.json`, `station_control.json`, `status.json`, output layout |
+| [docs/12_free_model_swarm.md](docs/12_free_model_swarm.md) | - | **free-model worker swarm** across Kaggle, a VPS hub, an ARM VM and a laptop: quickstart, provider slot and deal hunt, no-model hub, Kaggle multi-slot scaling, trigger-only coordinator |
 | [docs/SECURITY.md](docs/SECURITY.md) | - | threat model and checklists |
 | [docs/appendix_A_own_server_relay.md](docs/appendix_A_own_server_relay.md) | own server | optional: rsync relay through a key locked to `rrsync` |
 | [scripts/station_kernel.py](scripts/station_kernel.py) | Kaggle | the station: credentials, kit, gate, N workers, control loop, results |
@@ -59,6 +60,7 @@ station_ctl output <-- kaggle kernels output ----------  8 /kaggle/working/out/:
 | [scripts/load_sampler.sh](scripts/load_sampler.sh) | Kaggle | CPU/RAM sampler (TSV) |
 | [scripts/stream_summary.py](scripts/stream_summary.py) | anywhere | summary of Claude Code stream-json logs; prints no message content |
 | [tools/gen_kernel_listing.py](tools/gen_kernel_listing.py) | dev | regenerates docs/04 from the kernel source |
+| [swarm/](swarm/worker.py) | anywhere | the swarm code for docs/12: worker + adapters, provider probe, hub, Kaggle multi-slot scheduler, coordinator loop |
 | [tests/run_tests.sh](tests/run_tests.sh) | dev | shellcheck, `bash -n`, compile, unit tests, an end-to-end kernel run, doc sync |
 
 ## Quick start

@@ -15,3 +15,11 @@ review/
 run_output/
 __pycache__/
 *.pyc
+# swarm (docs/12): provider definitions with local key paths, work dirs, hub state, logs
+swarm/providers.json
+/hub/
+/work/
+/kaggle/
+*.log
+*_key
+keys/
