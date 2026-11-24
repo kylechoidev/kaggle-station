@@ -4,6 +4,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions are d
 
 ## [Unreleased] - 2026-11-24 (free-model swarm)
 
+### Changed
+- docs/12: pitfall and provider-slot note on multi-key bans (one free provider banned an account after about an
+  hour of 20 workers spread over 11 keys).
+
 ### Added
 - docs/12_free_model_swarm.md: many workers on free hosted LLMs across Kaggle CPU sessions, an ARM VM, a VPS hub and
   a laptop. Quickstart with expected output; the provider slot, probe-and-rank and the deal hunt at every start; the

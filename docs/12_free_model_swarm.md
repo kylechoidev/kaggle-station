@@ -182,6 +182,8 @@ Rules that held for every provider we tried (MEASURED 2026-11-24 unless marked):
   including checks) on one, 40-70 s on the other; in the same 15-minute window the faster one produced accepted
   results from several workers and the slower one none. We moved every worker to the faster endpoint and kept the
   slower as a tested fallback.
+- **Rate limits are per key, but terms are per person.** Do not multiply keys or accounts to get around a limit
+  unless the provider explicitly allows it (see the ban in section 9).
 - **Rate limits are per key, not per worker.** Read the `x-ratelimit-*` / `ratelimit` headers. One provider
   advertised a short per-key request window (a few hundred requests) shared by every worker and by another project
   on the same key; another advertised per-minute and per-hour request and token budgets. Adding workers past the
@@ -430,6 +432,14 @@ the prompt from stdin works).
 
 ## 9. Pitfalls (dated observations)
 
+- **Many keys from one person got the account banned** (2026-11-24, MEASURED). About 20 unattended workers were
+  spread over 11 keys of one free provider, 2-3 workers per key, about 3.7 requests/s in total; six of the keys had
+  been added 25 minutes earlier. After roughly an hour every key returned HTTP 401 `invalid_api_key` at the same
+  moment, the model list came back empty, and the account was banned. Spreading load across many keys or accounts
+  of one person reads as abuse. Before scaling: read the provider's terms on automation and on multiple keys or
+  accounts, stay well inside one account's published limits, and keep a second, tested provider ready to switch to.
+  The workers' stop on 401 (section 3) worked as designed: no claimed items were left open, but every worker sat
+  idle until a switch.
 - **`ssh host 'pkill -f "<pattern>"'` kills its own remote shell** when the pattern appears on that shell's command
   line (ssh exit 255), MEASURED twice. Use STOP files, `/proc` cmdline matching, or `pgrep -f '[p]attern'` style
   patterns the command line does not contain, then kill by PID.
